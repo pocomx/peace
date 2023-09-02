@@ -1,0 +1,145 @@
+on:
+  push:
+    paths:
+      - 'version/trojan.txt'
+
+name: trojan
+jobs:
+  build-linux:
+    runs-on: ubuntu-20.04
+    steps:
+      
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set variables
+        run: |
+          echo "RELEASE_VERSION=$(cat "version/trojan.txt" | head -1 | tr -d [:space:])" >> $GITHUB_ENV
+          echo "VERSION=$(wget -qO- https://api.github.com/repos/trojan-gfw/trojan/tags | grep 'name' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Start build
+        run: |
+          sudo apt-get install -y build-essential cmake libboost-system-dev libboost-program-options-dev libssl-dev default-libmysqlclient-dev
+          git clone https://github.com/trojan-gfw/trojan && cd trojan
+          mkdir -p Release && git checkout ${{ env.VERSION }}
+          cmake . && make
+          strip -s trojan && mv trojan Release/
+        shell : bash
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: ${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            ./trojan/Release/*
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set variables
+        run: |
+          echo "RELEASE_VERSION=$(cat "version/trojan.txt" | head -1 | tr -d [:space:])" >> $GITHUB_ENV
+          echo "VERSION=$(wget -qO- https://api.github.com/repos/trojan-gfw/trojan/tags | grep 'name' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+        shell: bash
+        
+      - name: Install boost
+        uses: MarkusJx/install-boost@v2.4.0
+        id: install-boost
+        with:
+          # Using Supported Boost Version Below (with msvc on Windows)
+          # https://github.com/MarkusJx/prebuilt-boost/blob/main/versions-manifest.json
+          boost_version: 1.77.0
+          boost_install_dir: 'C:/'
+          platform_version: 2019
+
+      - name: Start build
+        env:
+          BOOST_ROOT: ${{ steps.install-boost.outputs.BOOST_ROOT }}
+        run: |
+          echo "Using Supported OpenSSL Version Below"
+          echo "https://slproweb.com/products/Win32OpenSSL.html"
+          curl -LO https://slproweb.com/download/Win64OpenSSL-1_1_1L.exe
+          powershell ".\\Win64OpenSSL-1_1_1L.exe /silent /sp- /suppressmsgboxes /DIR='C:\\Program Files\\OpenSSL-Win64'"
+          git clone https://github.com/trojan-gfw/trojan && cd trojan
+          mkdir -p Release && git checkout ${{ env.VERSION }}
+          cmake -DBoost_INCLUDE_DIR="${BOOST_ROOT}/include" -DBoost_USE_STATIC_LIBS=ON -DOPENSSL_ROOT_DIR='C:/Program Files/OpenSSL-Win64' -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_MYSQL=OFF .
+          cmake --build . --config Release
+        shell : bash
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: ${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            ./trojan/Release/*
+
+  push:
+    runs-on: ubuntu-20.04
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set variables
+        run: |
+          echo "VERSION=$(cat "version/trojan.txt" | head -1 | tr -d [:space:])" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Get Dockerfile
+        run: |
+          cp src/trojan/* $PWD
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to DockerHub
+        uses: docker/login-action@v2.0.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build latest
+        uses: docker/build-push-action@v3.1.1
+        with:
+          context: .
+          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/trojan:latest
+            ${{ secrets.DOCKER_USERNAME }}/trojan:${{ env.VERSION }}
+
+  test:
+    needs: push
+    runs-on: ubuntu-20.04
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set variables
+        run: |
+          echo "VERSION=$(cat "version/trojan.txt" | head -1 | tr -d [:space:])" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Test Docker image
+        run: |
+          docker run --rm --entrypoint /usr/bin/trojan ${{ secrets.DOCKER_USERNAME }}/trojan:latest --version
+          docker run --rm --entrypoint /usr/bin/trojan ${{ secrets.DOCKER_USERNAME }}/trojan:${{ env.VERSION }} --version

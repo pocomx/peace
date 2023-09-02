@@ -1,0 +1,283 @@
+on:
+  push:
+    paths:
+      - 'version/naiveproxy'
+defaults:
+  run:
+    shell: bash
+
+name: naiveproxy
+jobs:
+  build-linux:
+    strategy:
+      matrix:
+        cpu: [x86, x64, arm, arm64]
+      fail-fast: false
+
+    runs-on: ubuntu-22.04
+    env:
+      EXTRA_FLAGS: target_cpu="${{ matrix.cpu }}"
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Set variables
+        run: |
+          echo "VERSION=$(cat "version/naiveproxy.txt" | head -n1 | tr -d [:space:])" >> $GITHUB_ENV
+          echo "NAIVE=$(wget -qO- https://api.github.com/repos/klzgrad/naiveproxy/tags | grep 'name' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+          echo "GOLANG=$(wget -qO- https://raw.githubusercontent.com/actions/go-versions/main/versions-manifest.json | grep 'version' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+        shell: bash
+        
+      - name: Install Golang
+        uses: actions/setup-go@v4
+        with: 
+          go-version: ${{ env.GOLANG }}
+
+      - name: Build
+        run: |
+          sudo apt update
+          sudo apt install -y ninja-build pkg-config qemu-user ccache bubblewrap
+          sudo apt purge -y libc6-i386
+          sudo apt purge -y qemu-user-binfmt
+          wget "https://github.com/pocomx/ninja/releases/download/qemu-user-static/qemu-user-static_8.0+dfsg-4_amd64.deb" -O qemu-user-static.deb
+          sudo dpkg -i qemu-user-static.deb
+          git clone https://github.com/klzgrad/naiveproxy naiveproxy
+          pushd naiveproxy || exit 1
+          echo "version is ${{ env.NAIVE }}"
+          git checkout ${{ env.NAIVE }}
+          popd || exit 1
+          pushd naiveproxy/src || exit 1
+          # Regenerate Debian keyring
+          rm -rf build/linux/sysroot_scripts/keyring.gpg
+          GPG_TTY=/dev/null build/linux/sysroot_scripts/generate_keyring.sh
+          chmod +x *.sh
+          ./get-clang.sh
+          ./build.sh
+          popd || exit 1
+          # pushd naiveproxy/src/out/Release/cronet || exit 1
+          # chmod +x *.sh
+          # CCACHE_DISABLE=1 ./go-build.sh
+          # popd || exit 1
+
+      - name: Ready to release
+        run: |
+          mkdir -p release #7zip
+          # wget "https://www.7-zip.org/a/7z2301-linux-x64.tar.xz" -O 7zip/7zip.tar.xz
+          # tar -xvf 7zip/7zip.tar.xz -C 7zip/ && mv 7zip/7zz .
+          # rm -rf 7zip && chmod +x 7zz
+          case ${{ matrix.cpu }} in
+            x86)
+              mv naiveproxy/src/out/Release/naive release/naive-linux-386
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-linux-386
+              # ./7zz a -m0=lzma2 -mx9 release/naive-cronet-linux-386.7z release/naive-cronet-linux-386
+              # rm -rf release/naive-cronet-linux-386
+              ;;
+            x64)
+              mv naiveproxy/src/out/Release/naive release/naive-linux-amd64
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-linux-amd64
+              # ./7zz a -m0=lzma2 -mx9 release/naive-cronet-linux-amd64.7z release/naive-cronet-linux-amd64
+              # rm -rf release/naive-cronet-linux-amd64
+              ;;
+            arm)
+              mv naiveproxy/src/out/Release/naive release/naive-linux-arm32-v7
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-linux-arm32-v7
+              # ./7zz a -m0=lzma2 -mx9 release/naive-cronet-linux-arm32-v7.7z release/naive-cronet-linux-arm32-v7
+              # rm -rf release/naive-cronet-linux-arm32-v7
+              ;;
+            arm64)
+              mv naiveproxy/src/out/Release/naive release/naive-linux-arm64
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-linux-arm64
+              # ./7zz a -m0=lzma2 -mx9 release/naive-cronet-linux-arm64.7z release/naive-cronet-linux-arm64
+              # rm -rf release/naive-cronet-linux-arm64
+              ;;
+            *)
+              echo "Error occurred" && exit 1
+              ;;
+          esac
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: ${{ env.VERSION }}
+          tag: ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          allowUpdates: true
+          artifacts: |
+            ./release/*
+
+  build-windows:
+    strategy:
+      matrix:
+        cpu: [x86, x64, arm64]
+      fail-fast: false
+
+    runs-on: windows-2022
+    env:
+      EXTRA_FLAGS: target_cpu="${{ matrix.cpu }}"
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install wget
+        run: |
+          powershell "choco install wget"
+
+      - name: Install ninja
+        uses: seanmiddleditch/gha-setup-ninja@master
+        with:
+          destination: ~/bin/ninja.exe
+
+      - name: Set variables
+        run: |
+          echo "VERSION=$(cat "version/naiveproxy.txt" | head -n1 | tr -d [:space:])" >> $GITHUB_ENV
+          echo "NAIVE=$(wget -qO- https://api.github.com/repos/klzgrad/naiveproxy/tags | grep 'name' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+          echo "GOLANG=$(wget -qO- https://raw.githubusercontent.com/actions/go-versions/main/versions-manifest.json | grep 'version' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+        shell: bash
+        
+      - name: Install Golang
+        uses: actions/setup-go@v4
+        with: 
+          go-version: ${{ env.GOLANG }}
+
+      - name: Build
+        run: |
+          git clone https://github.com/klzgrad/naiveproxy naiveproxy
+          pushd naiveproxy || exit 1
+          echo "version is ${{ env.NAIVE }}"
+          git checkout ${{ env.NAIVE }}
+          popd || exit 1
+          pushd naiveproxy/src || exit 1
+          chmod +x *.sh
+          ./get-clang.sh
+          ./build.sh
+          popd || exit 1
+          # pushd naiveproxy/src/out/Release/cronet || exit 1
+          # chmod +x *.sh
+          # CCACHE_DISABLE=1 ./go-build.sh
+          # popd || exit 1
+
+      - name: Ready to release
+        run: |
+          mkdir -p release
+          case ${{ matrix.cpu }} in
+            x86)
+              mv naiveproxy/src/out/Release/naive release/naive-windows-386.exe
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-windows-386
+              # 7z a -m0=lzma2 -mx9 release/naive-cronet-windows-386.7z release/naive-cronet-windows-386
+              # rm -rf release/naive-cronet-windows-386
+              ;;
+            x64)
+              mv naiveproxy/src/out/Release/naive release/naive-windows-amd64.exe
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-windows-amd64
+              # 7z a -m0=lzma2 -mx9 release/naive-cronet-windows-amd64.7z release/naive-cronet-windows-amd64
+              # rm -rf release/naive-cronet-windows-amd64
+              ;;
+            arm64)
+              mv naiveproxy/src/out/Release/naive release/naive-windows-arm64.exe
+              # mv naiveproxy/src/out/Release/cronet release/naive-cronet-windows-arm64
+              # 7z a -m0=lzma2 -mx9 release/naive-cronet-windows-arm64.7z release/naive-cronet-windows-arm64
+              # rm -rf release/naive-cronet-windows-arm64
+              ;;
+            *)
+              echo "Error occurred" && exit 1
+              ;;
+          esac
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: ${{ env.VERSION }}
+          tag: ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          allowUpdates: true
+          artifacts: |
+            ./release/*
+
+  push:
+    needs: build-linux
+    runs-on: ubuntu-22.04
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Set variables
+        run: |
+          echo "VERSION=$(cat "version/naiveproxy.txt" | head -n1 | tr -d [:space:])" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Get Dockerfile
+        run: |
+          cp src/naiveproxy/* $PWD
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2.1.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Login to DockerHub
+        uses: docker/login-action@v2.1.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Build latest
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: .
+          platforms: linux/386,linux/amd64,linux/arm/v7,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/naiveproxy:client
+            ${{ secrets.DOCKER_USERNAME }}/naiveproxy:${{ env.VERSION }}
+           
+  test:
+     needs: [build-linux,push]
+     runs-on: ubuntu-22.04
+     steps:
+       
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Setup variables
+        run: |
+          echo "VERSION=$(cat "version/naiveproxy.txt" | head -n1 | tr -d [:space:])" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Test Docker image
+        run: |
+          docker run --rm --entrypoint /usr/bin/naive ${{ secrets.DOCKER_USERNAME }}/naiveproxy:client --version
+          docker run --rm --entrypoint /usr/bin/naive ${{ secrets.DOCKER_USERNAME }}/naiveproxy:${{ env.VERSION }} --version
+
+  backup:
+      runs-on: ubuntu-22.04
+      steps:
+
+        - name: Checkout
+          uses: actions/checkout@v3
+
+        - name: Set variables
+          run: |
+            echo "TAGS=$(wget -qO- https://api.github.com/repos/klzgrad/naiveproxy/tags | grep 'name' | cut -d\" -f4 | head -1)" >> $GITHUB_ENV
+          shell: bash
+
+        - name: Start backup
+          run: |
+            sudo apt install -y aria2
+            wget -qO- https://api.github.com/repos/klzgrad/naiveproxy/releases/tags/${{ env.TAGS }} | jq ".assets[] | {browser_download_url}" -c | jq .browser_download_url -r | aria2c -c -x 8 -s 8 -j 1 -k 1M -i -
+            mkdir -p release && mv naiveproxy-* release
+
+        - name: Release
+          uses: actions/upload-artifact@v3
+          with:
+            name: ${{ env.TAGS }}
+            path: ./release
