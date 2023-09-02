@@ -37,7 +37,7 @@ fi
 CADDY_FILE="caddy-linux-uot-${ARCH}"
 
 echo "Downloading binary file: ${CADDY_FILE}"
-VERSION=$(wget -qO- https://raw.githubusercontent.com/pocomx/peace/master/version/caddy.txt | head -1 | tr -d [:space:])
+VERSION=$(wget -qO- https://raw.githubusercontent.com/pocomx/peace/main/version/caddy.txt | head -1 | tr -d [:space:])
 wget -O /usr/bin/caddy https://github.com/pocomx/peace/releases/download/${VERSION}/${CADDY_FILE} > /dev/null 2>&1
 
 if [ $? -ne 0 ]; then
